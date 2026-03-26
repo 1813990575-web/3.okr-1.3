@@ -5,6 +5,8 @@ import { MiniTimer } from './Timer/MiniTimer';
 import { TimerBubble } from './Timer/TimerBubble';
 import { DatePicker } from './DatePicker';
 import { TimelineContainer } from './Timeline';
+import { ReorderableList, DragHandle } from './shared/ReorderableList';
+import type { DragHandleProps } from './shared/ReorderableList';
 import dayjs from 'dayjs';
 
 export function RightPanel() {
@@ -22,7 +24,7 @@ export function RightPanel() {
     updateGoalDates,
     toggleShowDeadline,
     getDeadlineStatus,
-    moveGoalBefore,
+    reorderGoals,
   } = useGoalStore();
 
   const selectedGoal = selectedGoalId ? getGoalById(selectedGoalId) : null;
@@ -35,10 +37,6 @@ export function RightPanel() {
   const [titleInput, setTitleInput] = useState(selectedGoal?.title || '');
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'goals' | 'time'>('goals'); // 视图模式：goals=子目标管理, time=时间统计
-  
-  // 拖拽排序状态
-  const [draggedGoalId, setDraggedGoalId] = useState<string | null>(null);
-  const [dragOverGoalId, setDragOverGoalId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedGoal) {
@@ -208,10 +206,21 @@ export function RightPanel() {
         <div className="flex-1 overflow-y-auto px-8 py-6">
           <>
             {childGoals.length > 0 && (
-              <div className="flex flex-col items-start space-y-0.5">
-                {childGoals.map((child) => (
+              <ReorderableList
+                items={childGoals}
+                onReorder={(newOrder) => {
+                  // 本地状态立即更新，确保 UI 无闪烁
+                  console.log('[Drag] New order:', newOrder.map(g => g.id));
+                }}
+                onReorderComplete={async (newOrder) => {
+                  const orderedIds = newOrder.map(g => g.id);
+                  console.log('[Drag] Dragging complete. Final Array Order:', orderedIds);
+                  await reorderGoals(orderedIds);
+                }}
+                className="flex flex-col items-start"
+                itemClassName="w-full"
+                renderItem={(child, _index, dragHandleProps) => (
                   <ChildGoalItem
-                    key={child.id}
                     goal={child}
                     onSplit={() => handleSplit(child.id, child.isSplit)}
                     onToggleComplete={() => toggleGoalCompletion(child.id)}
@@ -221,14 +230,10 @@ export function RightPanel() {
                       }
                     }}
                     onDelete={() => deleteGoal(child.id)}
-                    draggedGoalId={draggedGoalId}
-                    dragOverGoalId={dragOverGoalId}
-                    setDraggedGoalId={setDraggedGoalId}
-                    setDragOverGoalId={setDragOverGoalId}
-                    onMoveGoal={moveGoalBefore}
+                    dragHandleProps={dragHandleProps}
                   />
-                ))}
-              </div>
+                )}
+              />
             )}
 
             {/* Add Child Goal */}
@@ -334,25 +339,16 @@ interface ChildGoalItemProps {
   onToggleComplete: () => void;
   onUpdateTitle: (newTitle: string) => void;
   onDelete?: () => void;
-  // 拖拽排序相关
-  draggedGoalId?: string | null;
-  dragOverGoalId?: string | null;
-  setDraggedGoalId?: (id: string | null) => void;
-  setDragOverGoalId?: (id: string | null) => void;
-  onMoveGoal?: (draggedId: string, targetId: string) => Promise<void>;
+  dragHandleProps: DragHandleProps;
 }
 
-function ChildGoalItem({ 
-  goal, 
-  onSplit, 
-  onToggleComplete, 
-  onUpdateTitle, 
+function ChildGoalItem({
+  goal,
+  onSplit,
+  onToggleComplete,
+  onUpdateTitle,
   onDelete,
-  draggedGoalId,
-  dragOverGoalId,
-  setDraggedGoalId,
-  setDragOverGoalId,
-  onMoveGoal,
+  dragHandleProps,
 }: ChildGoalItemProps) {
   const { getDeadlineStatus } = useGoalStore();
   const { toggleFocus, isGoalFocused, showBubble, setOnTimerComplete } = useTimer();
@@ -364,10 +360,6 @@ function ChildGoalItem({
   const menuRef = useRef<HTMLDivElement>(null);
   const goalRowRef = useRef<HTMLDivElement>(null);
   const [bubblePosition, setBubblePosition] = useState({ top: 0, left: 0 });
-  
-  // 拖拽状态
-  const isDragging = draggedGoalId === goal.id;
-  const isDragOver = dragOverGoalId === goal.id;
 
   // 专注状态
   const isFocused = isGoalFocused(goal.id);
@@ -394,6 +386,14 @@ function ChildGoalItem({
       inputRef.current.select();
     }
   }, [isEditing]);
+
+  // 新创建的目标自动进入编辑模式
+  useEffect(() => {
+    if (goal.title === '新建目标') {
+      setIsEditing(true);
+      setEditTitle(goal.title);
+    }
+  }, [goal.id]); // 只在 goal.id 变化时触发（即新目标创建时）
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -462,116 +462,51 @@ function ChildGoalItem({
     toggleFocus(goal.id);
   };
 
-  // 拖拽开始
-  const handleDragStart = (e: React.DragEvent) => {
-    if (setDraggedGoalId) {
-      setDraggedGoalId(goal.id);
-    }
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', goal.id);
-  };
-
-  // 拖拽结束
-  const handleDragEnd = () => {
-    if (setDraggedGoalId) {
-      setDraggedGoalId(null);
-    }
-    if (setDragOverGoalId) {
-      setDragOverGoalId(null);
-    }
-  };
-
-  // 拖拽经过
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    
-    if (draggedGoalId && draggedGoalId !== goal.id && setDragOverGoalId) {
-      setDragOverGoalId(goal.id);
-    }
-  };
-
-  // 拖拽离开
-  const handleDragLeave = () => {
-    if (setDragOverGoalId) {
-      setDragOverGoalId(null);
-    }
-  };
-
-  // 放置
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const draggedId = e.dataTransfer.getData('text/plain');
-    
-    if (draggedId && draggedId !== goal.id && onMoveGoal) {
-      await onMoveGoal(draggedId, goal.id);
-    }
-    
-    if (setDraggedGoalId) {
-      setDraggedGoalId(null);
-    }
-    if (setDragOverGoalId) {
-      setDragOverGoalId(null);
-    }
-  };
-
   return (
     <>
       <div
         ref={goalRowRef}
-        draggable
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
         className={`
           group relative flex items-center w-full py-2.5 rounded-xl transition-all duration-200 pr-2
-          ${isFocused 
-            ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20' 
+          -mx-4 px-4
+          ${isFocused
+            ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20'
             : 'hover:bg-stone-100/60'
           }
-          ${isDragging ? 'opacity-50' : ''}
-          ${isDragOver ? 'border-t-2 border-blue-400' : ''}
         `}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        {/* Deadline Badge - 右上角角标 */}
-        {badgeText && !isFocused && (
-          <div className="absolute -top-1 right-2 z-10">
-            <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1 text-[10px] font-bold text-white bg-red-500 rounded-full border-2 border-white shadow-sm">
-              {badgeText}
-            </span>
-          </div>
-        )}
-
         {/* Left padding area for hover actions */}
-        <div className="w-10 flex-shrink-0 flex items-center justify-end pr-1 relative">
-          {/* Hover Actions - only show when hovered and not focused */}
-          {isHovered && !isFocused && (
-            <div className="flex items-center">
-              {/* Split Icon - 移除六点拖拽图标，整行可拖拽 */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSplit();
-                }}
-                className={`w-5 h-5 flex items-center justify-center rounded transition-all duration-200 ${
-                  goal.isSplit 
-                    ? 'text-stone-800 hover:text-stone-900 hover:bg-stone-200/50' 
-                    : 'text-stone-300 hover:text-stone-800 hover:bg-stone-100/50'
-                }`}
-                title={goal.isSplit ? '进入详情' : '拆分目标'}
-              >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                </svg>
-              </button>
-            </div>
+        <div className="w-14 flex-shrink-0 flex items-center justify-center gap-2 relative">
+          {/* Drag Handle - IxD 隔离：只有六点图标触发拖拽，常驻但低透明度 */}
+          {!isFocused && (
+            <DragHandle
+              onPointerDown={dragHandleProps.onPointerDown}
+              isDragging={dragHandleProps.isDragging}
+              className="opacity-30 group-hover:opacity-100 transition-opacity duration-200"
+            />
           )}
+          {/* Split Icon - 仅在 group-hover 时从左侧滑入 */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSplit();
+            }}
+            className={`
+              w-5 h-5 flex items-center justify-center rounded transition-all duration-300 ease-out
+              transform -translate-x-2 opacity-0 group-hover:translate-x-0 group-hover:opacity-100
+              ${goal.isSplit
+                ? 'text-stone-800 hover:text-stone-900 hover:bg-stone-200/50'
+                : 'text-stone-300 hover:text-stone-800 hover:bg-stone-100/50'
+              }
+            `}
+            title={goal.isSplit ? '进入详情' : '拆分目标'}
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+          </button>
         </div>
 
         {/* Checkbox - 子目标勾选框缩小 */}
@@ -617,6 +552,12 @@ function ChildGoalItem({
             onClick={handleRowClick}
           >
             {goal.title}
+            {/* Deadline Badge - 紧跟在文字后方的红色角标 */}
+            {badgeText && !isFocused && (
+              <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold text-red-600 bg-red-100/80 flex-shrink-0 inline-block">
+                {deadlineStatus?.text}
+              </span>
+            )}
           </span>
         )}
 

@@ -2,10 +2,14 @@
 // game rules: 支持递归渲染 OKR 层级结构，支持展开/折叠和高亮选中
 // 支持两种模式：左侧边栏模式 (sidebar) 和中间面板模式 (middle)
 
-import React, { useRef, useEffect, useCallback, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { useGoalStore } from '../store/goalStore';
 import type { Goal } from '../db/schema';
 import { GoalTreeContextMenu } from './GoalTreeContextMenu';
+import { ReorderableList, DragHandle } from './shared/ReorderableList';
+import type { DragHandleProps } from './shared/ReorderableList';
+import { SidebarActionButton } from './SidebarActionButton';
+import { motion } from 'framer-motion';
 
 // 树节点引用映射 - 使用模块级变量确保全局唯一
 const goalNodeRefs = new Map<string, HTMLDivElement>();
@@ -17,7 +21,6 @@ interface GoalTreeSidebarProps {
 
 export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProps) {
   const {
-    goals,
     selectedGoalId,
     expandedGoalIds,
     getChildGoals,
@@ -25,7 +28,8 @@ export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProp
     toggleExpandGoal,
     expandGoalWithParents,
     deleteGoal,
-    moveGoalBefore,
+    reorderGoals,
+    addGoal,
   } = useGoalStore();
 
   // 右键菜单状态
@@ -35,10 +39,6 @@ export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProp
     goalId: string;
     goalTitle: string;
   } | null>(null);
-
-  // 拖拽状态
-  const [draggedGoalId, setDraggedGoalId] = useState<string | null>(null);
-  const [dragOverGoalId, setDragOverGoalId] = useState<string | null>(null);
 
   // 获取根级目标（没有 parentId 的目标）
   const rootGoals = getChildGoals(null);
@@ -66,7 +66,14 @@ export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProp
 
   // 根据模式选择样式
   const isMiddleMode = mode === 'middle';
-  
+
+  // 处理新建目标
+  const handleCreateGoal = async () => {
+    const newGoalId = await addGoal('新建目标', null);
+    selectGoal(newGoalId);
+    console.log('[Sidebar] Created new goal:', newGoalId);
+  };
+
   return (
     <div 
       className={`
@@ -91,48 +98,32 @@ export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProp
         </div>
       )}
 
-      {/* 目标树内容 */}
+      {/* 目标树内容 - 可滚动区域 */}
       <div className="flex-1 overflow-y-auto py-2">
         {rootGoals.length === 0 ? (
           <div className="px-3 py-4 text-xs text-stone-400 text-center">
             暂无目标
           </div>
         ) : (
-          rootGoals.map(goal => (
-            <GoalTreeNode
-              key={goal.id}
-              goal={goal}
-              depth={0}
-              selectedGoalId={selectedGoalId}
-              expandedGoalIds={expandedGoalIds}
-              onSelect={selectGoal}
-              onToggleExpand={toggleExpandGoal}
-              getChildGoals={getChildGoals}
-              mode={mode}
-              onContextMenu={setContextMenu}
-              // 拖拽相关
-              draggedGoalId={draggedGoalId}
-              dragOverGoalId={dragOverGoalId}
-              setDraggedGoalId={setDraggedGoalId}
-              setDragOverGoalId={setDragOverGoalId}
-              onMoveGoal={moveGoalBefore}
-            />
-          ))
+          <GoalTreeNodeList
+            goals={rootGoals}
+            depth={0}
+            selectedGoalId={selectedGoalId}
+            expandedGoalIds={expandedGoalIds}
+            onSelect={selectGoal}
+            onToggleExpand={toggleExpandGoal}
+            getChildGoals={getChildGoals}
+            mode={mode}
+            onContextMenu={setContextMenu}
+            onReorder={reorderGoals}
+          />
         )}
       </div>
 
-      {/* Footer - 仅在侧边栏模式显示 */}
-      {!isMiddleMode && (
-        <div className="p-3 border-t border-stone-200/50">
-          <button className="w-full flex items-center gap-2 px-3 py-2 text-stone-500 hover:text-stone-700 hover:bg-stone-100/60 rounded-lg transition-all duration-200 text-sm">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            搜索
-            <span className="ml-auto text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded">⌘K</span>
-          </button>
-        </div>
-      )}
+      {/* 新建目标按钮 - 常驻在底部，不随列表滚动 */}
+      <div className="flex-shrink-0 px-4 py-4 border-t border-stone-200/50 bg-[#fafaf9]">
+        <SidebarActionButton onClick={handleCreateGoal} />
+      </div>
 
       {/* 右键菜单 */}
       {contextMenu && (
@@ -149,6 +140,64 @@ export function GoalTreeSidebar({ mode = 'sidebar', width }: GoalTreeSidebarProp
   );
 }
 
+// 树节点列表组件 - 支持同级排序
+interface GoalTreeNodeListProps {
+  goals: Goal[];
+  depth: number;
+  selectedGoalId: string | null;
+  expandedGoalIds: Set<string>;
+  onSelect: (goalId: string) => void;
+  onToggleExpand: (goalId: string) => void;
+  getChildGoals: (parentId: string | null) => Goal[];
+  mode: 'sidebar' | 'middle';
+  onContextMenu: (menu: { x: number; y: number; goalId: string; goalTitle: string }) => void;
+  onReorder: (orderedIds: string[]) => Promise<void>;
+}
+
+function GoalTreeNodeList({
+  goals,
+  depth,
+  selectedGoalId,
+  expandedGoalIds,
+  onSelect,
+  onToggleExpand,
+  getChildGoals,
+  mode,
+  onContextMenu,
+  onReorder,
+}: GoalTreeNodeListProps) {
+  return (
+    <ReorderableList
+      items={goals}
+      onReorder={(newOrder) => {
+        console.log('[Sidebar Drag] New order:', newOrder.map(g => g.id));
+      }}
+      onReorderComplete={async (newOrder) => {
+        const orderedIds = newOrder.map(g => g.id);
+        console.log('[Sidebar Drag] Dragging complete. Final Array Order:', orderedIds);
+        await onReorder(orderedIds);
+      }}
+      className="flex flex-col"
+      itemClassName="w-full"
+      renderItem={(goal, _index, dragHandleProps) => (
+        <GoalTreeNode
+          goal={goal}
+          depth={depth}
+          selectedGoalId={selectedGoalId}
+          expandedGoalIds={expandedGoalIds}
+          onSelect={onSelect}
+          onToggleExpand={onToggleExpand}
+          getChildGoals={getChildGoals}
+          mode={mode}
+          onContextMenu={onContextMenu}
+          onReorder={onReorder}
+          dragHandleProps={dragHandleProps}
+        />
+      )}
+    />
+  );
+}
+
 // 树节点组件
 interface GoalTreeNodeProps {
   goal: Goal;
@@ -160,12 +209,8 @@ interface GoalTreeNodeProps {
   getChildGoals: (parentId: string | null) => Goal[];
   mode: 'sidebar' | 'middle';
   onContextMenu: (menu: { x: number; y: number; goalId: string; goalTitle: string }) => void;
-  // 拖拽相关
-  draggedGoalId: string | null;
-  dragOverGoalId: string | null;
-  setDraggedGoalId: (id: string | null) => void;
-  setDragOverGoalId: (id: string | null) => void;
-  onMoveGoal: (draggedId: string, targetId: string) => Promise<void>;
+  onReorder: (orderedIds: string[]) => Promise<void>;
+  dragHandleProps: DragHandleProps;
 }
 
 function GoalTreeNode({
@@ -178,11 +223,8 @@ function GoalTreeNode({
   getChildGoals,
   mode,
   onContextMenu,
-  draggedGoalId,
-  dragOverGoalId,
-  setDraggedGoalId,
-  setDragOverGoalId,
-  onMoveGoal,
+  onReorder,
+  dragHandleProps,
 }: GoalTreeNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const children = getChildGoals(goal.id);
@@ -191,10 +233,6 @@ function GoalTreeNode({
   const isSelected = selectedGoalId === goal.id;
   const isMiddleMode = mode === 'middle';
   const isRoot = depth === 0;
-  
-  // 拖拽状态
-  const isDragging = draggedGoalId === goal.id;
-  const isDragOver = dragOverGoalId === goal.id;
 
   // 注册 ref - 使用唯一的 key 确保不同模式不会冲突
   useEffect(() => {
@@ -207,6 +245,10 @@ function GoalTreeNode({
   }, [goal.id]);
 
   const handleClick = () => {
+    // 如果正在拖拽，不触发点击
+    if (dragHandleProps.isDragging) {
+      return;
+    }
     onSelect(goal.id);
   };
 
@@ -227,51 +269,6 @@ function GoalTreeNode({
     });
   };
 
-  // 拖拽开始
-  const handleDragStart = (e: React.DragEvent) => {
-    setDraggedGoalId(goal.id);
-    e.dataTransfer.effectAllowed = 'move';
-    // 设置拖拽时的透明度
-    e.dataTransfer.setData('text/plain', goal.id);
-  };
-
-  // 拖拽结束
-  const handleDragEnd = () => {
-    setDraggedGoalId(null);
-    setDragOverGoalId(null);
-  };
-
-  // 拖拽经过
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    
-    // 不能拖拽到自己身上
-    if (draggedGoalId && draggedGoalId !== goal.id) {
-      setDragOverGoalId(goal.id);
-    }
-  };
-
-  // 拖拽离开
-  const handleDragLeave = () => {
-    setDragOverGoalId(null);
-  };
-
-  // 放置
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const draggedId = e.dataTransfer.getData('text/plain');
-    
-    if (draggedId && draggedId !== goal.id) {
-      await onMoveGoal(draggedId, goal.id);
-    }
-    
-    setDraggedGoalId(null);
-    setDragOverGoalId(null);
-  };
-
   // 计算缩进 - 参考第二张图的样式
   const indentStyle = { paddingLeft: `${16 + depth * 24}px` };
 
@@ -279,30 +276,29 @@ function GoalTreeNode({
     <div ref={nodeRef} id={`goal-node-${goal.id}`}>
       {/* 节点行 */}
       <div
-        draggable
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         style={indentStyle}
         className={`
-          flex items-center gap-3 cursor-pointer
+          group flex items-center gap-3 cursor-pointer
           transition-all duration-150
-          ${isMiddleMode 
+          ${isMiddleMode
             ? 'py-2 pr-4'  // 中间模式：更大的 padding
             : 'py-1.5 pr-2'  // 侧边栏模式：紧凑
           }
-          ${isSelected 
-            ? 'bg-stone-200/70' 
+          ${isSelected
+            ? 'bg-stone-200/70'
             : 'hover:bg-stone-100/60'
           }
-          ${isDragging ? 'opacity-50' : ''}
-          ${isDragOver ? 'border-t-2 border-blue-400' : ''}
         `}
       >
+        {/* 拖拽手柄 - 直接触发 */}
+        <DragHandle
+          onPointerDown={dragHandleProps.onPointerDown}
+          isDragging={dragHandleProps.isDragging}
+          className="flex-shrink-0"
+        />
+
         {/* 完成状态指示器 - 空心圆圈 */}
         <div
           className={`
@@ -315,22 +311,23 @@ function GoalTreeNode({
           `}
         />
 
-        {/* 标题 - 左对齐，单行省略 */}
-        <span 
+        {/* 标题 - 左对齐，单行省略，添加 layout="position" 防止收起时文字被拉伸 */}
+        <motion.span
+          layout="position"
           className={`
             text-left flex-1 truncate whitespace-nowrap overflow-hidden
-            ${isMiddleMode 
-              ? isRoot 
+            ${isMiddleMode
+              ? isRoot
                 ? 'text-sm text-stone-800 font-medium'  // 父目标：深色
                 : 'text-sm text-stone-400'              // 子任务：浅灰色
               : 'text-xs text-stone-600'
             }
             ${isSelected ? 'font-medium' : ''}
-          `} 
+          `}
           title={goal.title}
         >
           {goal.title}
-        </span>
+        </motion.span>
 
         {/* 展开/收起按钮 - 仅对有子目标的项目显示 */}
         {hasChildren && (
@@ -352,27 +349,18 @@ function GoalTreeNode({
 
       {/* 子节点 */}
       {hasChildren && isExpanded && (
-        <div>
-          {children.map(child => (
-            <GoalTreeNode
-              key={child.id}
-              goal={child}
-              depth={depth + 1}
-              selectedGoalId={selectedGoalId}
-              expandedGoalIds={expandedGoalIds}
-              onSelect={onSelect}
-              onToggleExpand={onToggleExpand}
-              getChildGoals={getChildGoals}
-              mode={mode}
-              onContextMenu={onContextMenu}
-              draggedGoalId={draggedGoalId}
-              dragOverGoalId={dragOverGoalId}
-              setDraggedGoalId={setDraggedGoalId}
-              setDragOverGoalId={setDragOverGoalId}
-              onMoveGoal={onMoveGoal}
-            />
-          ))}
-        </div>
+        <GoalTreeNodeList
+          goals={children}
+          depth={depth + 1}
+          selectedGoalId={selectedGoalId}
+          expandedGoalIds={expandedGoalIds}
+          onSelect={onSelect}
+          onToggleExpand={onToggleExpand}
+          getChildGoals={getChildGoals}
+          mode={mode}
+          onContextMenu={onContextMenu}
+          onReorder={onReorder}
+        />
       )}
     </div>
   );

@@ -28,6 +28,9 @@ interface GoalState {
   toggleExpandGoal: (goalId: string) => void;
   expandGoalWithParents: (goalId: string) => void;
   getGoalParentChain: (goalId: string) => string[];
+  // 拖拽排序
+  moveGoalBefore: (draggedGoalId: string, targetGoalId: string) => Promise<void>;
+  reorderGoals: (orderedIds: string[]) => Promise<void>;
 }
 
 export const useGoalStore = create<GoalState>((set, get) => ({
@@ -406,6 +409,40 @@ export const useGoalStore = create<GoalState>((set, get) => ({
       console.log('[Store] Moved goal:', draggedGoalId, 'before', targetGoalId, 'newOrder:', newSortOrder);
     } catch (error) {
       console.error('[Store] Failed to move goal:', error);
+      throw error;
+    }
+  },
+
+  // 全量重排：根据 ID 数组重新分配 sortOrder
+  reorderGoals: async (orderedIds: string[]) => {
+    console.log('[Store] Reorder request:', orderedIds);
+    
+    try {
+      await db.transaction('rw', db.goals, async () => {
+        for (let i = 0; i < orderedIds.length; i++) {
+          const goalId = orderedIds[i];
+          const newSortOrder = (i + 1) * 1000; // 1000, 2000, 3000...
+          await db.goals.update(goalId, { 
+            sortOrder: newSortOrder,
+            updatedAt: Date.now() 
+          });
+        }
+      });
+      
+      // 立即更新本地状态，确保 UI 无闪烁
+      set((state) => ({
+        goals: state.goals.map(g => {
+          const newIndex = orderedIds.indexOf(g.id);
+          if (newIndex !== -1) {
+            return { ...g, sortOrder: (newIndex + 1) * 1000 };
+          }
+          return g;
+        }),
+      }));
+      
+      console.log('[Store] Reorder complete. New sortOrders:', orderedIds.map((id, i) => `${id}:${(i+1)*1000}`));
+    } catch (error) {
+      console.error('[Store] Failed to reorder goals:', error);
       throw error;
     }
   },
