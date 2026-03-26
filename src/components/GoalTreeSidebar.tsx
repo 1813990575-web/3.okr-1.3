@@ -315,12 +315,12 @@ function GoalTreeNode({
         <motion.span
           layout="position"
           className={`
-            text-left flex-1 truncate whitespace-nowrap overflow-hidden
+            text-left flex-1 truncate whitespace-nowrap overflow-hidden text-xs
             ${isMiddleMode
               ? isRoot
-                ? 'text-sm text-stone-800 font-medium'  // 父目标：深色
-                : 'text-sm text-stone-400'              // 子任务：浅灰色
-              : 'text-xs text-stone-600'
+                ? 'text-stone-800 font-medium'  // 父目标：深色
+                : 'text-stone-400'              // 子任务：浅灰色
+              : 'text-stone-600'
             }
             ${isSelected ? 'font-medium' : ''}
           `}

@@ -203,7 +203,7 @@ export function RightPanel() {
       {/* Content Area - 根据视图模式显示不同内容 */}
       {viewMode === 'goals' ? (
         /* 子目标管理视图 */
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        <div className="flex-1 overflow-y-auto py-6">
           <>
             {childGoals.length > 0 && (
               <ReorderableList
@@ -217,8 +217,8 @@ export function RightPanel() {
                   console.log('[Drag] Dragging complete. Final Array Order:', orderedIds);
                   await reorderGoals(orderedIds);
                 }}
-                className="flex flex-col items-start"
-                itemClassName="w-full"
+                className="flex flex-col"
+                itemClassName="w-full px-8"
                 renderItem={(child, _index, dragHandleProps) => (
                   <ChildGoalItem
                     goal={child}
@@ -238,7 +238,7 @@ export function RightPanel() {
 
             {/* Add Child Goal */}
             {isAdding ? (
-              <div className="mt-6 flex items-center w-full">
+              <div className="mt-6 flex items-center w-full px-8">
                 <div className="w-10 flex-shrink-0 flex items-center justify-end pr-1" />
                 <div className="w-4 h-4 rounded-full border-[1.5px] border-stone-300 flex-shrink-0" />
                 <input
@@ -267,7 +267,7 @@ export function RightPanel() {
             ) : (
               <button
                 onClick={() => setIsAdding(true)}
-                className="mt-6 flex items-center text-stone-400 hover:text-stone-600 transition-all duration-200 text-sm group"
+                className="mt-6 flex items-center w-full px-8 text-stone-400 hover:text-stone-600 transition-all duration-200 text-sm group"
               >
                 <div className="w-10 flex-shrink-0 flex items-center justify-end pr-1">
                   <div className="w-4 h-4 rounded-full border border-stone-300 flex items-center justify-center group-hover:border-stone-400 group-hover:bg-stone-100 transition-all duration-200">
@@ -340,6 +340,7 @@ interface ChildGoalItemProps {
   onUpdateTitle: (newTitle: string) => void;
   onDelete?: () => void;
   dragHandleProps: DragHandleProps;
+  depth?: number;
 }
 
 function ChildGoalItem({
@@ -349,15 +350,17 @@ function ChildGoalItem({
   onUpdateTitle,
   onDelete,
   dragHandleProps,
+  depth = 0,
 }: ChildGoalItemProps) {
-  const { getDeadlineStatus } = useGoalStore();
+  const { getDeadlineStatus, getChildGoals, addGoal, selectGoal, splitGoal, deleteGoal, updateGoalTitle, toggleGoalCompletion } = useGoalStore();
   const { toggleFocus, isGoalFocused, showBubble, setOnTimerComplete } = useTimer();
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [showContextMenu, setShowContextMenu] = useState(false);
+  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const goalRowRef = useRef<HTMLDivElement>(null);
   const [bubblePosition, setBubblePosition] = useState({ top: 0, left: 0 });
 
@@ -394,18 +397,6 @@ function ChildGoalItem({
       setEditTitle(goal.title);
     }
   }, [goal.id]); // 只在 goal.id 变化时触发（即新目标创建时）
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setShowMoreMenu(false);
-      }
-    };
-    if (showMoreMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showMoreMenu]);
 
   // 计算气泡位置 - 显示在子目标下方
   useEffect(() => {
@@ -462,54 +453,72 @@ function ChildGoalItem({
     toggleFocus(goal.id);
   };
 
+  // 处理右键菜单
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenuPos({ x: e.clientX, y: e.clientY });
+    setShowContextMenu(true);
+  };
+
+  // 关闭右键菜单
+  const handleCloseContextMenu = () => {
+    setShowContextMenu(false);
+  };
+
+  // 处理添加子目标（原地展开）
+  const handleAddChild = async () => {
+    await addGoal('新建子目标', goal.id);
+    setIsExpanded(true);
+  };
+
+  // 获取子目标
+  const childGoals = getChildGoals(goal.id);
+  const hasChildren = childGoals.length > 0;
+
   return (
     <>
       <div
         ref={goalRowRef}
         className={`
-          group relative flex items-center w-full py-2.5 rounded-xl transition-all duration-200 pr-2
-          -mx-4 px-4
+          group relative flex items-center w-full py-2.5 rounded-xl transition-all duration-200
           ${isFocused
             ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20'
             : 'hover:bg-stone-100/60'
           }
         `}
+        style={{ paddingLeft: `${depth * 20}px`, paddingRight: '12px' }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        onContextMenu={handleContextMenu}
+        onDoubleClick={onSplit}
       >
-        {/* Left padding area for hover actions */}
-        <div className="w-14 flex-shrink-0 flex items-center justify-center gap-2 relative">
-          {/* Drag Handle - IxD 隔离：只有六点图标触发拖拽，常驻但低透明度 */}
+        {/* 图标操作区 - 固定宽度 48px，紧贴左侧 */}
+        <div className="w-12 flex-shrink-0 flex items-center justify-start gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          {/* Drag Handle - 六点图标 */}
           {!isFocused && (
             <DragHandle
               onPointerDown={dragHandleProps.onPointerDown}
               isDragging={dragHandleProps.isDragging}
-              className="opacity-30 group-hover:opacity-100 transition-opacity duration-200"
+              className="text-stone-400 hover:text-stone-600"
             />
           )}
-          {/* Split Icon - 仅在 group-hover 时从左侧滑入 */}
+          {/* Add Child Icon - + 图标 */}
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onSplit();
+              handleAddChild();
             }}
-            className={`
-              w-5 h-5 flex items-center justify-center rounded transition-all duration-300 ease-out
-              transform -translate-x-2 opacity-0 group-hover:translate-x-0 group-hover:opacity-100
-              ${goal.isSplit
-                ? 'text-stone-800 hover:text-stone-900 hover:bg-stone-200/50'
-                : 'text-stone-300 hover:text-stone-800 hover:bg-stone-100/50'
-              }
-            `}
-            title={goal.isSplit ? '进入详情' : '拆分目标'}
+            className="w-5 h-5 flex items-center justify-center rounded text-stone-400 hover:text-stone-600 hover:bg-stone-200/50 transition-colors duration-200"
+            title="添加子目标"
           >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
           </button>
         </div>
 
-        {/* Checkbox - 子目标勾选框缩小 */}
+        {/* Checkbox - 子目标勾选框缩小，与操作区紧邻 */}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -584,83 +593,6 @@ function ChildGoalItem({
           </button>
         )}
 
-        {/* More Actions - 三个点图标 */}
-        {!isFocused && (
-          <div className="relative" ref={menuRef}>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMoreMenu(!showMoreMenu);
-              }}
-              className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 ${
-                isHovered || showMoreMenu
-                  ? 'text-stone-400 hover:text-stone-600 hover:bg-stone-200/50'
-                  : 'text-transparent'
-              }`}
-              title="更多操作"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-                <circle cx="8" cy="3" r="1.5" />
-                <circle cx="8" cy="8" r="1.5" />
-                <circle cx="8" cy="13" r="1.5" />
-              </svg>
-            </button>
-
-            {/* Dropdown Menu */}
-            {showMoreMenu && (
-              <div className="absolute right-0 top-full mt-1.5 w-36 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-200/80 py-1.5 z-10 overflow-hidden">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMoreMenu(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-stone-600 hover:bg-stone-50 flex items-center gap-2.5 transition-colors duration-150"
-                >
-                  <svg className="w-4 h-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  执行时间
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMoreMenu(false);
-                    toggleFocus(goal.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-stone-600 hover:bg-stone-50 flex items-center gap-2.5 transition-colors duration-150"
-                >
-                  <svg className="w-4 h-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  专注
-                </button>
-                <div className="border-t border-stone-100 my-1" />
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMoreMenu(false);
-                    onDelete?.();
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 transition-colors duration-150"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                  删除
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Split indicator - 拆分图标在三个点之后 */}
-        {!isFocused && goal.isSplit && (
-          <span className="text-stone-400 flex-shrink-0 ml-1" title="已拆分">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-          </span>
-        )}
       </div>
 
       {/* 气泡计时器 - 使用 Portal 方式定位 */}
@@ -668,6 +600,72 @@ function ChildGoalItem({
         <div style={{ position: 'fixed', top: bubblePosition.top, left: bubblePosition.left, zIndex: 100 }}>
           <TimerBubble goalTitle={goal.title} anchorRef={goalRowRef} />
         </div>
+      )}
+
+      {/* 子目标列表 - 递归渲染 ChildGoalItem */}
+      {(isExpanded || hasChildren) && (
+        <div className="mt-1 space-y-1" style={{ paddingLeft: `${(depth + 1) * 20}px` }}>
+          {childGoals.map((child) => (
+            <ChildGoalItem
+              key={child.id}
+              goal={child}
+              onSplit={() => {
+                if (child.isSplit) {
+                  selectGoal(child.id);
+                } else {
+                  splitGoal(child.id);
+                }
+              }}
+              onToggleComplete={() => toggleGoalCompletion(child.id)}
+              onUpdateTitle={(newTitle) => updateGoalTitle(child.id, newTitle)}
+              onDelete={() => deleteGoal(child.id)}
+              dragHandleProps={dragHandleProps}
+              depth={depth + 1}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 右键菜单 */}
+      {showContextMenu && (
+        <>
+          {/* 遮罩层 - 点击关闭菜单 */}
+          <div
+            className="fixed inset-0 z-40"
+            onClick={handleCloseContextMenu}
+          />
+          {/* 菜单 */}
+          <div
+            className="fixed z-50 w-36 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-200/80 py-1.5 overflow-hidden"
+            style={{ top: contextMenuPos.y, left: contextMenuPos.x }}
+          >
+            <button
+              onClick={() => {
+                onSplit();
+                handleCloseContextMenu();
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-stone-600 hover:bg-stone-50 flex items-center gap-2.5 transition-colors duration-150"
+            >
+              <svg className="w-4 h-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+              拆分
+            </button>
+            <div className="border-t border-stone-100 my-1" />
+            <button
+              onClick={() => {
+                onDelete?.();
+                handleCloseContextMenu();
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2.5 transition-colors duration-150"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              删除
+            </button>
+          </div>
+        </>
       )}
     </>
   );

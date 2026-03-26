@@ -5,7 +5,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTimelineStore } from '../../store/timelineStore';
 import { useGoalStore } from '../../store/goalStore';
 import { MonthlyCalendar } from './MonthlyCalendar';
-import { formatDuration } from './types';
 
 interface LogDetailPanelProps {
   selectedDate: Date;
@@ -18,7 +17,7 @@ export function LogDetailPanel({ selectedDate, onDateSelect }: LogDetailPanelPro
 
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [parentGoal, setParentGoal] = useState<{ id: string; title: string } | null>(null);
+  const [, setParentGoal] = useState<{ id: string; title: string } | null>(null);
   const [childGoal, setChildGoal] = useState<{ id: string; title: string } | null>(null);
 
   // 加载选中的记录信息
@@ -66,11 +65,6 @@ export function LogDetailPanel({ selectedDate, onDateSelect }: LogDetailPanelPro
       setIsSaving(false);
     }
   }, [note, selectedFocusLog, updateFocusLogNote]);
-
-  // 格式化时长显示（转换为分钟数字）- 保留此逻辑
-  const durationMinutes = selectedFocusLog
-    ? Math.round(selectedFocusLog.duration / 60)
-    : 0;
 
   // 保留 formatDuration 所需的 duration 值
   const duration = selectedFocusLog?.duration || 0;

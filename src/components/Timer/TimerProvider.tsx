@@ -248,7 +248,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     startTimeRef.current = null;
   };
 
-  // 完成计时 - 手动完成并保存记录
+  // 完成计时 - 手动完成并保存记录，同时取消专注状态
   const completeTimer = () => {
     // 保存专注记录
     if (activeFocusIdRef.current && startTimeRef.current) {
@@ -266,6 +266,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (onCompleteRef.current) {
       onCompleteRef.current();
     }
+    
+    // 取消专注状态（清除 activeFocusId）
+    setActiveFocusId(null);
+    setShowBubble(false);
   };
 
   // 调整时间（以5分钟为单位）

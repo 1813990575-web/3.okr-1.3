@@ -166,7 +166,7 @@ function ReorderableListItem<T extends ReorderableItem>({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       as="div"
-      className={`${className} overflow-hidden`}  // 添加 overflow-hidden 防止残留高度撑开父容器
+      className={`${className}`}
       // 布局动画 - 只进行位置动画，避免尺寸变化导致文字拉扯
       layout="position"
       transition={LAYOUT_TRANSITION}
