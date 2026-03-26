@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useGoalStore } from './store/goalStore';
 import { TimerProvider } from './components/Timer/TimerProvider';
+import { SidebarRail } from './components/SidebarRail';
 import { GoalTreeSidebar } from './components/GoalTreeSidebar';
 import { RightPanel } from './components/RightPanel';
 
@@ -70,7 +71,10 @@ function App() {
   return (
     <TimerProvider>
       <div className="relative h-screen w-screen flex bg-gradient-to-br from-gray-50 to-gray-100 overflow-hidden" ref={containerRef}>
-        {/* Middle Panel - 目标目录树（鸠占鹊巢） */}
+        {/* SidebarRail - 一级功能侧边栏 */}
+        <SidebarRail />
+
+        {/* Middle Panel - 目标目录树（二级目录） */}
         <GoalTreeSidebar mode="middle" width={middlePanelWidth} />
 
         {/* Resizer - 可拖拽分隔条 */}
@@ -79,7 +83,7 @@ function App() {
             className="absolute z-20 cursor-col-resize group"
             onMouseDown={handleResizeStart}
             style={{
-              left: `${middlePanelWidth}px`,
+              left: `${64 + middlePanelWidth}px`,
               width: '6px',
               height: '100%',
               transform: 'translateX(-50%)',
@@ -97,7 +101,7 @@ function App() {
           </div>
         )}
 
-        {/* Right Panel - Main workspace */}
+        {/* Right Panel - Main workspace（三级主工作区） */}
         <RightPanel />
       </div>
     </TimerProvider>
