@@ -6,6 +6,8 @@ import { useState } from 'react';
 import type { TimeBlockData } from './types';
 import { getBlockColor } from './types';
 import { TimeBlockContextMenu } from './TimeBlockContextMenu';
+import { useGoalStore } from '../../store/goalStore';
+import { getGoalNodeElement } from '../GoalTreeSidebar';
 
 interface TimeBlockProps {
   data: TimeBlockData;
@@ -18,12 +20,47 @@ export function TimeBlock({ data, isSelected = false, onClick, onDeleted }: Time
   const [isHovered, setIsHovered] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const colors = getBlockColor(data.goalId);
+  
+  // 获取 goalStore 方法
+  const { expandGoalWithParents, selectGoal } = useGoalStore();
 
   // 是否有备注
   const hasNote = data.note && data.note.trim().length > 0;
 
   // 计算最小高度（确保即使很短的区块也能显示文字）
   const minHeightPx = 16;
+
+  // 处理点击 - 联动左侧目录
+  const handleClick = () => {
+    // 1. 调用原始的 onClick（更新右侧详情面板）
+    onClick?.(data);
+    
+    // 2. 联动左侧目录
+    const goalId = data.goalId;
+    
+    // 展开父节点链
+    expandGoalWithParents(goalId);
+    
+    // 选中该目标
+    selectGoal(goalId);
+    
+    // 3. 延迟滚动和高亮（等待 DOM 展开完成）
+    setTimeout(() => {
+      const element = getGoalNodeElement(goalId);
+      if (element) {
+        // 平滑滚动到视图中央
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        // 添加高亮动画
+        element.classList.add('goal-node-flash');
+        
+        // 动画结束后移除 class
+        setTimeout(() => {
+          element.classList.remove('goal-node-flash');
+        }, 600);
+      }
+    }, 150);
+  };
 
   // 处理右键点击
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -55,7 +92,7 @@ export function TimeBlock({ data, isSelected = false, onClick, onDeleted }: Time
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={() => onClick?.(data)}
+        onClick={handleClick}
         onContextMenu={handleContextMenu}
       >
         {/* 内容区域 - Flex 居中对齐 */}

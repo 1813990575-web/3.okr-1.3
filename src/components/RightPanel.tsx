@@ -22,6 +22,7 @@ export function RightPanel() {
     updateGoalDates,
     toggleShowDeadline,
     getDeadlineStatus,
+    moveGoalBefore,
   } = useGoalStore();
 
   const selectedGoal = selectedGoalId ? getGoalById(selectedGoalId) : null;
@@ -34,6 +35,10 @@ export function RightPanel() {
   const [titleInput, setTitleInput] = useState(selectedGoal?.title || '');
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'goals' | 'time'>('goals'); // 视图模式：goals=子目标管理, time=时间统计
+  
+  // 拖拽排序状态
+  const [draggedGoalId, setDraggedGoalId] = useState<string | null>(null);
+  const [dragOverGoalId, setDragOverGoalId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedGoal) {
@@ -216,6 +221,11 @@ export function RightPanel() {
                       }
                     }}
                     onDelete={() => deleteGoal(child.id)}
+                    draggedGoalId={draggedGoalId}
+                    dragOverGoalId={dragOverGoalId}
+                    setDraggedGoalId={setDraggedGoalId}
+                    setDragOverGoalId={setDragOverGoalId}
+                    onMoveGoal={moveGoalBefore}
                   />
                 ))}
               </div>
@@ -324,9 +334,26 @@ interface ChildGoalItemProps {
   onToggleComplete: () => void;
   onUpdateTitle: (newTitle: string) => void;
   onDelete?: () => void;
+  // 拖拽排序相关
+  draggedGoalId?: string | null;
+  dragOverGoalId?: string | null;
+  setDraggedGoalId?: (id: string | null) => void;
+  setDragOverGoalId?: (id: string | null) => void;
+  onMoveGoal?: (draggedId: string, targetId: string) => Promise<void>;
 }
 
-function ChildGoalItem({ goal, onSplit, onToggleComplete, onUpdateTitle, onDelete }: ChildGoalItemProps) {
+function ChildGoalItem({ 
+  goal, 
+  onSplit, 
+  onToggleComplete, 
+  onUpdateTitle, 
+  onDelete,
+  draggedGoalId,
+  dragOverGoalId,
+  setDraggedGoalId,
+  setDragOverGoalId,
+  onMoveGoal,
+}: ChildGoalItemProps) {
   const { getDeadlineStatus } = useGoalStore();
   const { toggleFocus, isGoalFocused, showBubble, setOnTimerComplete } = useTimer();
   const [isHovered, setIsHovered] = useState(false);
@@ -337,6 +364,10 @@ function ChildGoalItem({ goal, onSplit, onToggleComplete, onUpdateTitle, onDelet
   const menuRef = useRef<HTMLDivElement>(null);
   const goalRowRef = useRef<HTMLDivElement>(null);
   const [bubblePosition, setBubblePosition] = useState({ top: 0, left: 0 });
+  
+  // 拖拽状态
+  const isDragging = draggedGoalId === goal.id;
+  const isDragOver = dragOverGoalId === goal.id;
 
   // 专注状态
   const isFocused = isGoalFocused(goal.id);
@@ -431,16 +462,79 @@ function ChildGoalItem({ goal, onSplit, onToggleComplete, onUpdateTitle, onDelet
     toggleFocus(goal.id);
   };
 
+  // 拖拽开始
+  const handleDragStart = (e: React.DragEvent) => {
+    if (setDraggedGoalId) {
+      setDraggedGoalId(goal.id);
+    }
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', goal.id);
+  };
+
+  // 拖拽结束
+  const handleDragEnd = () => {
+    if (setDraggedGoalId) {
+      setDraggedGoalId(null);
+    }
+    if (setDragOverGoalId) {
+      setDragOverGoalId(null);
+    }
+  };
+
+  // 拖拽经过
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    
+    if (draggedGoalId && draggedGoalId !== goal.id && setDragOverGoalId) {
+      setDragOverGoalId(goal.id);
+    }
+  };
+
+  // 拖拽离开
+  const handleDragLeave = () => {
+    if (setDragOverGoalId) {
+      setDragOverGoalId(null);
+    }
+  };
+
+  // 放置
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const draggedId = e.dataTransfer.getData('text/plain');
+    
+    if (draggedId && draggedId !== goal.id && onMoveGoal) {
+      await onMoveGoal(draggedId, goal.id);
+    }
+    
+    if (setDraggedGoalId) {
+      setDraggedGoalId(null);
+    }
+    if (setDragOverGoalId) {
+      setDragOverGoalId(null);
+    }
+  };
+
   return (
     <>
       <div
         ref={goalRowRef}
+        draggable
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         className={`
           group relative flex items-center w-full py-2.5 rounded-xl transition-all duration-200 pr-2
           ${isFocused 
             ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20' 
             : 'hover:bg-stone-100/60'
           }
+          ${isDragging ? 'opacity-50' : ''}
+          ${isDragOver ? 'border-t-2 border-blue-400' : ''}
         `}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
@@ -459,22 +553,7 @@ function ChildGoalItem({ goal, onSplit, onToggleComplete, onUpdateTitle, onDelet
           {/* Hover Actions - only show when hovered and not focused */}
           {isHovered && !isFocused && (
             <div className="flex items-center">
-              {/* Grip/Drag Icon */}
-              <button
-                className="w-5 h-5 flex items-center justify-center text-stone-300 hover:text-stone-500 cursor-grab active:cursor-grabbing rounded hover:bg-stone-200/50 transition-all duration-200"
-                title="拖拽排序"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 8 12">
-                  <circle cx="2.5" cy="2" r="1" />
-                  <circle cx="5.5" cy="2" r="1" />
-                  <circle cx="2.5" cy="6" r="1" />
-                  <circle cx="5.5" cy="6" r="1" />
-                  <circle cx="2.5" cy="10" r="1" />
-                  <circle cx="5.5" cy="10" r="1" />
-                </svg>
-              </button>
-              {/* Split Icon */}
+              {/* Split Icon - 移除六点拖拽图标，整行可拖拽 */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();

@@ -5,6 +5,8 @@ interface GoalState {
   goals: Goal[];
   selectedGoalId: string | null;
   isLoading: boolean;
+  // 树状结构展开状态
+  expandedGoalIds: Set<string>;
 
   // Actions
   loadGoals: () => Promise<void>;
@@ -22,12 +24,17 @@ interface GoalState {
   updateGoalDates: (goalId: string, startDate: number | null, endDate: number | null) => Promise<void>;
   toggleShowDeadline: (goalId: string) => Promise<void>;
   getDeadlineStatus: (goalId: string) => { text: string; isOverdue: boolean } | null;
+  // 树状结构操作
+  toggleExpandGoal: (goalId: string) => void;
+  expandGoalWithParents: (goalId: string) => void;
+  getGoalParentChain: (goalId: string) => string[];
 }
 
 export const useGoalStore = create<GoalState>((set, get) => ({
   goals: [],
   selectedGoalId: null,
   isLoading: false,
+  expandedGoalIds: new Set(),
 
   // 从数据库加载所有目标
   loadGoals: async () => {
@@ -45,6 +52,13 @@ export const useGoalStore = create<GoalState>((set, get) => ({
   // 添加新目标
   addGoal: async (title: string, parentId: string | null = null) => {
     const now = Date.now();
+    
+    // 获取同级最大 sortOrder
+    const siblings = get().getChildGoals(parentId);
+    const maxSortOrder = siblings.length > 0 
+      ? Math.max(...siblings.map(g => g.sortOrder))
+      : 0;
+    
     const newGoal: Goal = {
       id: crypto.randomUUID(),
       title,
@@ -54,6 +68,7 @@ export const useGoalStore = create<GoalState>((set, get) => ({
       startDate: null,
       endDate: null,
       showDeadline: false,
+      sortOrder: maxSortOrder + 1000, // 新目标排在最后
       createdAt: now,
       updatedAt: now,
     };
@@ -128,9 +143,12 @@ export const useGoalStore = create<GoalState>((set, get) => ({
     return get().goals.find(g => g.id === goalId);
   },
 
-  // 获取子目标
+  // 获取子目标（按 sortOrder 排序）
   getChildGoals: (parentId: string | null) => {
-    return get().goals.filter(g => g.parentId === parentId);
+    return get()
+      .goals
+      .filter(g => g.parentId === parentId)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
   },
 
   // 获取所有被拆分的目标（用于中间面板）
@@ -288,6 +306,107 @@ export const useGoalStore = create<GoalState>((set, get) => ({
       return { text: `剩 ${diffDays} 天`, isOverdue: false };
     } else {
       return { text: `超 ${Math.abs(diffDays)} 天`, isOverdue: true };
+    }
+  },
+
+  // 切换目标的展开/折叠状态
+  toggleExpandGoal: (goalId: string) => {
+    set((state) => {
+      const newExpanded = new Set(state.expandedGoalIds);
+      if (newExpanded.has(goalId)) {
+        newExpanded.delete(goalId);
+      } else {
+        newExpanded.add(goalId);
+      }
+      return { expandedGoalIds: newExpanded };
+    });
+    console.log('[Store] Toggled expand goal:', goalId);
+  },
+
+  // 展开目标及其所有父节点
+  expandGoalWithParents: (goalId: string) => {
+    const { getGoalParentChain } = get();
+    const parentChain = getGoalParentChain(goalId);
+    
+    set((state) => {
+      const newExpanded = new Set(state.expandedGoalIds);
+      // 展开所有父节点
+      parentChain.forEach(id => newExpanded.add(id));
+      // 也展开目标本身
+      newExpanded.add(goalId);
+      return { expandedGoalIds: newExpanded };
+    });
+    console.log('[Store] Expanded goal with parents:', goalId, 'Chain:', parentChain);
+  },
+
+  // 获取目标的父节点链（从根到目标的父节点）
+  getGoalParentChain: (goalId: string) => {
+    const { goals } = get();
+    const chain: string[] = [];
+    
+    let current = goals.find(g => g.id === goalId);
+    while (current?.parentId) {
+      chain.unshift(current.parentId);
+      current = goals.find(g => g.id === current!.parentId);
+    }
+    
+    return chain;
+  },
+
+  // 拖拽排序：将目标移动到另一个目标之前
+  moveGoalBefore: async (draggedGoalId: string, targetGoalId: string) => {
+    const { goals, getGoalById } = get();
+    
+    const draggedGoal = getGoalById(draggedGoalId);
+    const targetGoal = getGoalById(targetGoalId);
+    
+    if (!draggedGoal || !targetGoal) {
+      console.error('[Store] Goal not found for drag');
+      return;
+    }
+    
+    // 确保在同一父级下
+    if (draggedGoal.parentId !== targetGoal.parentId) {
+      console.error('[Store] Cannot drag between different parents');
+      return;
+    }
+    
+    const siblings = goals
+      .filter(g => g.parentId === targetGoal.parentId && g.id !== draggedGoalId)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+    
+    // 找到目标位置
+    const targetIndex = siblings.findIndex(g => g.id === targetGoalId);
+    
+    // 计算新的 sortOrder
+    let newSortOrder: number;
+    if (targetIndex === 0) {
+      // 移到第一个
+      newSortOrder = targetGoal.sortOrder - 500;
+    } else {
+      // 移到中间
+      const prevGoal = siblings[targetIndex - 1];
+      newSortOrder = (prevGoal.sortOrder + targetGoal.sortOrder) / 2;
+    }
+    
+    try {
+      await db.goals.update(draggedGoalId, { 
+        sortOrder: newSortOrder, 
+        updatedAt: Date.now() 
+      });
+      
+      set((state) => ({
+        goals: state.goals.map(g =>
+          g.id === draggedGoalId 
+            ? { ...g, sortOrder: newSortOrder } 
+            : g
+        ),
+      }));
+      
+      console.log('[Store] Moved goal:', draggedGoalId, 'before', targetGoalId, 'newOrder:', newSortOrder);
+    } catch (error) {
+      console.error('[Store] Failed to move goal:', error);
+      throw error;
     }
   },
 }));

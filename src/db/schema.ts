@@ -12,6 +12,8 @@ export interface Goal {
   startDate: number | null;  // 开始日期 (timestamp)
   endDate: number | null;    // 截止日期 (timestamp)
   showDeadline: boolean;     // 是否显示 deadline
+  // 排序字段
+  sortOrder: number;         // 同级排序顺序
   createdAt: number;
   updatedAt: number;
 }
@@ -37,10 +39,17 @@ export class AhaOKRDatabase extends Dexie {
   constructor() {
     super('AhaOKRDatabase');
     
-    // 版本 4：添加 focus_logs 表
-    this.version(4).stores({
-      goals: 'id, parentId, isSplit, isCompleted, startDate, endDate, showDeadline, createdAt, updatedAt',
+    // 版本 5：添加 sortOrder 字段
+    this.version(5).stores({
+      goals: 'id, parentId, isSplit, isCompleted, startDate, endDate, showDeadline, sortOrder, createdAt, updatedAt',
       focusLogs: 'id, goalId, startTime, endTime, [goalId+startTime], [startTime+endTime]'
+    }).upgrade(tx => {
+      // 为现有数据添加默认 sortOrder
+      return tx.table('goals').toCollection().modify(goal => {
+        if (goal.sortOrder === undefined) {
+          goal.sortOrder = goal.createdAt;
+        }
+      });
     });
   }
 }
